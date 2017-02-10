@@ -1,5 +1,8 @@
 use std::collections::HashMap;
+use std::thread;
+use std::sync::Arc;
 
+#[derive(Clone)]
 struct Store {
     name: String,
     prices: HashMap<String, f32>,
@@ -46,26 +49,33 @@ fn build_stores() -> Vec<Store> {
     stores
 }
 
-fn find_best_store<'a>(stores: &'a Vec<Store>, shopping_list: &Vec<String>) -> Option<&'a Store> {
-    stores.iter().min_by(|store_1, store_2| {
-        let sum_1 = compute_sum(store_1, shopping_list);
-        let sum_2 = compute_sum(store_2, shopping_list);
-        sum_1.partial_cmp(&sum_2).unwrap()
-    })
+fn find_best_store(stores: Vec<Store>, shopping_list: Arc<Vec<String>>) -> Option<Store> {
+    stores.into_iter()
+          .map(|store| {
+              let list = shopping_list.clone();
+              thread::spawn(move || {
+                  (compute_sum(&store, list), store)
+              })
+          })
+          .into_iter()
+          .map(|t| t.join().unwrap())
+          .min_by(|&(cost_1, _), &(cost_2, _)| {
+              cost_1.partial_cmp(&cost_2).unwrap()
+          }).map(|(_, store)| store)
 }
 
-fn compute_sum(store: &Store, shopping_list: &Vec<String>) -> f32 {
+fn compute_sum(store: &Store, shopping_list: Arc<Vec<String>>) -> f32 {
     shopping_list.iter()
                  .map(|item_name| store.price(item_name))
                  .sum()
 }
 
 pub fn main() {
-    let shopping_list = vec![format!("chocolate"),
-                             format!("doll"),
-                             format!("bike")];
+    let shopping_list = Arc::new(vec![format!("chocolate"),
+                                      format!("doll"),
+                                      format!("bike")]);
     let stores = build_stores();
-    if let Some(&Store { ref name, .. }) = find_best_store(&stores, &shopping_list) {
+    if let Some(Store { name, .. }) = find_best_store(stores, shopping_list.clone()) {
         println!("Best store: {}", name);
     } else {
         println!("No stores present");
