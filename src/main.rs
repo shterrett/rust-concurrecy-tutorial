@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::thread;
 use std::sync::Arc;
+use std::sync::mpsc::channel;
+use std::mem::drop;
 
 #[derive(Clone)]
 struct Store {
@@ -50,18 +52,22 @@ fn build_stores() -> Vec<Store> {
 }
 
 fn find_best_store(stores: Vec<Store>, shopping_list: Arc<Vec<String>>) -> Option<Store> {
-    stores.into_iter()
-          .map(|store| {
-              let list = shopping_list.clone();
-              thread::spawn(move || {
-                  (compute_sum(&store, list), store)
-              })
-          })
-          .into_iter()
-          .map(|t| t.join().unwrap())
-          .min_by(|&(cost_1, _), &(cost_2, _)| {
-              cost_1.partial_cmp(&cost_2).unwrap()
-          }).map(|(_, store)| store)
+    let (tx, rx) = channel();
+
+    for store in stores.into_iter() {
+        let local_tx = tx.clone();
+        let local_list = shopping_list.clone();
+        thread::spawn(move || {
+            local_tx.send((compute_sum(&store, local_list), store)).unwrap();
+        });
+    }
+    drop(tx);
+
+    rx.iter()
+      .min_by(|&(cost_1, _), &(cost_2, _)| {
+          cost_1.partial_cmp(&cost_2).unwrap()
+      })
+      .map(|(_, store)| store)
 }
 
 fn compute_sum(store: &Store, shopping_list: Arc<Vec<String>>) -> f32 {
