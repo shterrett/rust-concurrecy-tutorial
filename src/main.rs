@@ -1,8 +1,7 @@
+use std::f32::INFINITY;
 use std::collections::HashMap;
 use std::thread;
-use std::sync::Arc;
-use std::sync::mpsc::channel;
-use std::mem::drop;
+use std::sync::{ Arc, Mutex };
 
 #[derive(Clone)]
 struct Store {
@@ -52,22 +51,24 @@ fn build_stores() -> Vec<Store> {
 }
 
 fn find_best_store(stores: Vec<Store>, shopping_list: Arc<Vec<String>>) -> Option<Store> {
-    let (tx, rx) = channel();
+    let best: Arc<Mutex<(f32, Option<Store>)>> = Arc::new(Mutex::new((INFINITY, None)));
 
-    for store in stores.into_iter() {
-        let local_tx = tx.clone();
-        let local_list = shopping_list.clone();
-        thread::spawn(move || {
-            local_tx.send((compute_sum(&store, local_list), store)).unwrap();
-        });
-    }
-    drop(tx);
-
-    rx.iter()
-      .min_by(|&(cost_1, _), &(cost_2, _)| {
-          cost_1.partial_cmp(&cost_2).unwrap()
-      })
-      .map(|(_, store)| store)
+    let _ = stores.into_iter()
+                  .map(|store| {
+                      let local_list = shopping_list.clone();
+                      let local_best = best.clone();
+                      thread::spawn(move || {
+                          let mut data = local_best.lock().unwrap();
+                          let price = compute_sum(&store, local_list);
+                          if price < data.0  {
+                              *data = (price, Some(store));
+                          }
+                      })
+                  })
+                  .map(|handle| handle.join().unwrap())
+                  .count();
+    let answer = best.lock().unwrap();
+    answer.1.clone()
 }
 
 fn compute_sum(store: &Store, shopping_list: Arc<Vec<String>>) -> f32 {
