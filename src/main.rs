@@ -1,7 +1,10 @@
-use std::f32::INFINITY;
+#[macro_use]
+extern crate chan;
+
 use std::collections::HashMap;
 use std::thread;
-use std::sync::{ Arc, Mutex };
+use std::sync::Arc;
+use std::mem::drop;
 
 #[derive(Clone)]
 struct Store {
@@ -51,24 +54,32 @@ fn build_stores() -> Vec<Store> {
 }
 
 fn find_best_store(stores: Vec<Store>, shopping_list: Arc<Vec<String>>) -> Option<Store> {
-    let best: Arc<Mutex<(f32, Option<Store>)>> = Arc::new(Mutex::new((INFINITY, None)));
+    let (work_tx, work_rx) = chan::async();
+    let (result_tx, result_rx) = chan::async();
 
-    let _ = stores.into_iter()
-                  .map(|store| {
-                      let local_list = shopping_list.clone();
-                      let local_best = best.clone();
-                      thread::spawn(move || {
-                          let mut data = local_best.lock().unwrap();
-                          let price = compute_sum(&store, local_list);
-                          if price < data.0  {
-                              *data = (price, Some(store));
-                          }
-                      })
-                  })
-                  .map(|handle| handle.join().unwrap())
-                  .count();
-    let answer = best.lock().unwrap();
-    answer.1.clone()
+    let num_threads = 2;
+    for _ in 0..num_threads {
+        let local_tx = result_tx.clone();
+        let local_rx = work_rx.clone();
+        let local_list = shopping_list.clone();
+        thread::spawn(move || {
+            for store in local_rx {
+                local_tx.send((compute_sum(&store, local_list.clone()), store));
+            }
+        });
+    }
+    drop(result_tx);
+
+    for store in stores.into_iter() {
+        work_tx.send(store)
+    }
+    drop(work_tx);
+
+    result_rx.iter()
+      .min_by(|&(cost_1, _), &(cost_2, _)| {
+          cost_1.partial_cmp(&cost_2).unwrap()
+      })
+      .map(|(_, store)| store)
 }
 
 fn compute_sum(store: &Store, shopping_list: Arc<Vec<String>>) -> f32 {
